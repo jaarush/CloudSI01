@@ -1,61 +1,68 @@
-from flask import Flask, render_template, request, redirect, url_for
-import pyrebase
-import requests
-import datetime
+from flask import Flask, render_template, redirect, url_for, request, flash, session
+from flask_sqlalchemy import SQLAlchemy
+from datetime import datetime
+from forms import DocumentForm
+from models import db, Document, Version
 
 app = Flask(__name__)
+app.config['SECRET_KEY'] = 'your_secret_key'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///cloud_notebook.db'
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db.init_app(app)
 
-# Firebase configuration
-firebase_config = {
-    "apiKey": "YOUR_FIREBASE_API_KEY",
-    "authDomain": "YOUR_PROJECT_ID.firebaseapp.com",
-    "databaseURL": "https://YOUR_PROJECT_ID.firebaseio.com",
-    "projectId": "YOUR_PROJECT_ID",
-    "storageBucket": "YOUR_PROJECT_ID.appspot.com",
-    "messagingSenderId": "YOUR_MESSAGING_SENDER_ID",
-    "appId": "YOUR_APP_ID"
-}
+# Create database
+@app.before_first_request
+def create_tables():
+    db.create_all()
 
-# Initialize Firebase
-firebase = pyrebase.initialize_app(firebase_config)
-db = firebase.database()
+# Document list and search
+@app.route("/", methods=["GET", "POST"])
+def home():
+    query = request.args.get("query")
+    if query:
+        documents = Document.query.filter(Document.title.contains(query)).all()
+    else:
+        documents = Document.query.all()
+    return render_template("home.html", documents=documents)
 
-# OpenWeatherMap API configuration
-WEATHER_API_KEY = "YOUR_OPENWEATHERMAP_API_KEY"
-WEATHER_URL = "http://api.openweathermap.org/data/2.5/weather"
+# Document creation and editing
+@app.route("/document/new", methods=["GET", "POST"])
+@app.route("/document/<int:doc_id>", methods=["GET", "POST"])
+def document(doc_id=None):
+    form = DocumentForm()
+    document = Document.query.get(doc_id) if doc_id else None
 
-@app.route('/')
-def index():
-    # Fetch all weather data entries
-    weather_entries = db.child("weather").get().val()
-    return render_template("index.html", weather_entries=weather_entries)
+    if form.validate_on_submit():
+        if document:
+            document.title = form.title.data
+            document.content = form.content.data
+            db.session.commit()
+            flash("Document updated.")
+        else:
+            new_document = Document(title=form.title.data, content=form.content.data)
+            db.session.add(new_document)
+            db.session.commit()
+            flash("Document created.")
+        return redirect(url_for("home"))
 
-@app.route('/get_weather', methods=['POST'])
-def get_weather():
-    city = request.form.get("city")
-    response = requests.get(WEATHER_URL, params={
-        "q": city,
-        "appid": WEATHER_API_KEY,
-        "units": "metric"
-    })
+    return render_template("document.html", form=form, document=document)
 
-    if response.status_code == 200:
-        weather_data = response.json()
-        entry = {
-            "city": city,
-            "temperature": weather_data["main"]["temp"],
-            "description": weather_data["weather"][0]["description"],
-            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        }
-        # Save weather data in Firebase
-        db.child("weather").push(entry)
-    return redirect(url_for("index"))
+# Version control
+@app.route("/document/<int:doc_id>/versions")
+def versions(doc_id):
+    document = Document.query.get(doc_id)
+    return render_template("versions.html", document=document)
 
-@app.route('/delete/<string:entry_id>')
-def delete_entry(entry_id):
-    # Delete an entry from Firebase
-    db.child("weather").child(entry_id).remove()
-    return redirect(url_for("index"))
+# Version restore
+@app.route("/document/<int:doc_id>/restore/<int:version_id>")
+def restore_version(doc_id, version_id):
+    version = Version.query.get(version_id)
+    document = Document.query.get(doc_id)
+    document.content = version.content
+    db.session.commit()
+    flash("Version restored.")
+    return redirect(url_for("document", doc_id=doc_id))
 
-if __name__ == '__main__':
+# Run the app
+if __name__ == "__main__":
     app.run(debug=True)

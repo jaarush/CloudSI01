@@ -1,0 +1,15 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{{ document.title }} - Versions</title>
+</head>
+<body>
+    <h1>Versions of {{ document.title }}</h1>
+    <ul>
+        {% for version in document.versions %}
+            <li>{{ version.timestamp }} - <a href="{{ url_for('restore_version', doc_id=document.id, version_id=version.id) }}">Restore</a></li>
+        {% endfor %}
+    </ul>
+</body>
+</html>
